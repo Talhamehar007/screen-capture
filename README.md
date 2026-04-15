@@ -4,6 +4,23 @@
 
 It is intentionally limited to one responsibility: efficient screen capture.
 
+## Getting Started in 60 Seconds
+
+```bash
+# 1) Ensure ffmpeg is installed
+ffmpeg -version
+
+# 2) List monitors
+cargo run -- --list-monitors
+
+# 3) Start recording (writes chunked MP4 files)
+cargo run -- --fps 2 --directory ./captures
+```
+
+Stop with `Ctrl+C`.
+
+First run note: your OS may ask for screen recording permission.
+
 ## Project Description
 
 This project extracts only the capture pipeline from a broader recording stack and keeps it small, auditable, and practical for long-running local recording.
@@ -203,4 +220,3 @@ cargo fmt
 cargo check
 cargo clippy --all-targets -- -W clippy::all
 ```
-
