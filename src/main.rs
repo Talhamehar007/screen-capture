@@ -44,7 +44,7 @@ enum VideoCodec {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "snapstream",
+    name = "screen-capture",
     about = "standalone screen capture pipeline (ffmpeg video chunks)",
     version
 )]
@@ -456,7 +456,7 @@ fn main() -> Result<()> {
     let selected_monitor = pick_monitor(&monitors, cli.monitor_id)?;
     let interval = Duration::from_secs_f64(1.0 / cli.fps);
 
-    println!("Starting snapstream capture pipeline (ffmpeg chunked video)");
+    println!("Starting screen-capture pipeline (ffmpeg chunked video)");
     println!(
         "monitor={} fps={} directory={} chunk_seconds={} quality={:?} codec={:?}",
         selected_monitor.id,

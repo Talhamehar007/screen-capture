@@ -1,8 +1,8 @@
 [package]
-name = "snapstream"
+name = "screen-capture"
 version = "0.1.0"
 edition = "2021"
-description = "Standalone screen capture pipeline (frames to JPEG)"
+description = "Standalone ffmpeg-based screen capture CLI with chunked MP4 output"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 

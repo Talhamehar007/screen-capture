@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working in the `snapstream` repository.
+Guidance for coding agents working in the `screen-capture` repository.
 
 ## Scope
 
@@ -8,7 +8,7 @@ Applies to the entire repository.
 
 ## Project Goal
 
-`snapstream` is a minimal, standalone screen capture CLI.
+`screen-capture` is a minimal, standalone screen capture CLI.
 
 - Keep the project focused on screen capture only.
 - Avoid adding OCR, audio transcription, AI inference, server endpoints, or cloud sync.
@@ -39,4 +39,3 @@ Use `#` comments for Python.
 - Keep dependencies lightweight and cross-platform.
 - Keep file output predictable and documented.
 - End files with a newline.
-
