@@ -9,7 +9,7 @@ It keeps only the capture pipeline and intentionally excludes higher-level platf
 1. Enumerates displays.
 2. Captures frames from a selected monitor at `--fps`.
 3. Streams raw RGBA frames into `ffmpeg`.
-4. Encodes compact MP4 chunks (`libx265`, HEVC) for storage-efficient recording.
+4. Encodes compact MP4 chunks (`libx265`/`libx264`) for storage-efficient recording.
 
 ## What It Does Not Do
 
@@ -82,18 +82,32 @@ snapstream [OPTIONS]
 | `--monitor-id` | int | auto | Target monitor ID |
 | `--chunk-seconds` | int | `30` | Chunk rotation interval |
 | `--video-quality` | enum | `balanced` | `low`, `balanced`, `high`, `max` |
+| `--codec` | enum | `h265` | `h265`, `h264` |
 | `--frames` | int | unlimited | Capture exactly N frames then exit |
 | `--ffmpeg-path` | path | `ffmpeg` | ffmpeg binary path |
 | `--list-monitors` | bool | `false` | Print monitors and exit |
 
 ### Quality Mapping
 
-`--video-quality` maps to encoder parameters:
+`--video-quality` maps to encoder parameters by codec:
 
-- `low` → CRF 32, preset ultrafast
-- `balanced` → CRF 23, preset ultrafast
-- `high` → CRF 18, preset fast
-- `max` → CRF 14, preset medium
+- `--codec h265`:
+  - `low` → CRF 32, preset ultrafast
+  - `balanced` → CRF 23, preset ultrafast
+  - `high` → CRF 18, preset fast
+  - `max` → CRF 14, preset medium
+- `--codec h264`:
+  - `low` → CRF 30, preset veryfast
+  - `balanced` → CRF 23, preset veryfast
+  - `high` → CRF 18, preset fast
+  - `max` → CRF 15, preset medium
+
+### Codec Fallback Behavior
+
+- Default is `--codec h265`.
+- If `libx265` is unavailable but `libx264` exists, Snapstream automatically falls back to H.264 and prints a warning.
+- If you explicitly set `--codec h264`, no fallback is used; `libx264` must be available.
+- If neither encoder exists, startup fails with a clear error.
 
 ## Output Layout
 
@@ -127,6 +141,12 @@ Use custom ffmpeg binary:
 
 ```bash
 cargo run -- --ffmpeg-path /usr/local/bin/ffmpeg --fps 2 --directory ./captures
+```
+
+Force H.264 codec:
+
+```bash
+cargo run -- --codec h264 --fps 2 --directory ./captures
 ```
 
 ## Public Repo Safety
@@ -163,4 +183,3 @@ cargo fmt
 cargo check
 cargo clippy --all-targets -- -W clippy::all
 ```
-

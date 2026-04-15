@@ -36,6 +36,12 @@ enum VideoQuality {
     Max,
 }
 
+#[derive(Debug, Copy, Clone, ValueEnum)]
+enum VideoCodec {
+    H265,
+    H264,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "snapstream",
@@ -68,6 +74,9 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = VideoQuality::Balanced)]
     video_quality: VideoQuality,
 
+    #[arg(long, value_enum, default_value_t = VideoCodec::H265)]
+    codec: VideoCodec,
+
     #[arg(long, help = "List available monitors and exit")]
     list_monitors: bool,
 
@@ -99,6 +108,7 @@ impl FfmpegChunkWriter {
         monitor_id: u32,
         fps: f64,
         quality: VideoQuality,
+        codec: VideoCodec,
         width: u32,
         height: u32,
     ) -> Result<Self> {
@@ -117,8 +127,12 @@ impl FfmpegChunkWriter {
 
         let size_arg = format!("{}x{}", width, height);
         let fps_arg = fps.to_string();
-        let crf = video_quality_to_crf(quality);
-        let preset = video_quality_to_preset(quality);
+        let crf = video_quality_to_crf(quality, codec);
+        let preset = video_quality_to_preset(quality, codec);
+        let codec_name = video_codec_to_ffmpeg(codec);
+        let codec_tag = video_codec_to_tag(codec);
+        let codec_params_flag = video_codec_params_flag(codec);
+        let codec_params_value = video_codec_params_value(codec);
 
         let mut command = Command::new(ffmpeg_path);
         command
@@ -137,15 +151,15 @@ impl FfmpegChunkWriter {
                 "-vf",
                 "scale=trunc(iw/2)*2:trunc(ih/2)*2",
                 "-c:v",
-                "libx265",
+                codec_name,
                 "-tag:v",
-                "hvc1",
+                codec_tag,
                 "-preset",
                 preset,
                 "-crf",
                 crf,
-                "-x265-params",
-                "bframes=0",
+                codec_params_flag,
+                codec_params_value,
                 "-pix_fmt",
                 "yuv420p",
                 "-movflags",
@@ -206,20 +220,118 @@ impl FfmpegChunkWriter {
     }
 }
 
-fn video_quality_to_crf(quality: VideoQuality) -> &'static str {
-    match quality {
-        VideoQuality::Low => "32",
-        VideoQuality::Balanced => "23",
-        VideoQuality::High => "18",
-        VideoQuality::Max => "14",
+fn video_codec_to_ffmpeg(codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H265 => "libx265",
+        VideoCodec::H264 => "libx264",
     }
 }
 
-fn video_quality_to_preset(quality: VideoQuality) -> &'static str {
-    match quality {
-        VideoQuality::Low | VideoQuality::Balanced => "ultrafast",
-        VideoQuality::High => "fast",
-        VideoQuality::Max => "medium",
+fn video_codec_to_tag(codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H265 => "hvc1",
+        VideoCodec::H264 => "avc1",
+    }
+}
+
+fn video_codec_params_flag(codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H265 => "-x265-params",
+        VideoCodec::H264 => "-x264-params",
+    }
+}
+
+fn video_codec_params_value(_codec: VideoCodec) -> &'static str {
+    "bframes=0"
+}
+
+fn video_quality_to_crf(quality: VideoQuality, codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H265 => match quality {
+            VideoQuality::Low => "32",
+            VideoQuality::Balanced => "23",
+            VideoQuality::High => "18",
+            VideoQuality::Max => "14",
+        },
+        VideoCodec::H264 => match quality {
+            VideoQuality::Low => "30",
+            VideoQuality::Balanced => "23",
+            VideoQuality::High => "18",
+            VideoQuality::Max => "15",
+        },
+    }
+}
+
+fn video_quality_to_preset(quality: VideoQuality, codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H265 => match quality {
+            VideoQuality::Low | VideoQuality::Balanced => "ultrafast",
+            VideoQuality::High => "fast",
+            VideoQuality::Max => "medium",
+        },
+        VideoCodec::H264 => match quality {
+            VideoQuality::Low | VideoQuality::Balanced => "veryfast",
+            VideoQuality::High => "fast",
+            VideoQuality::Max => "medium",
+        },
+    }
+}
+
+fn ffmpeg_has_encoder(ffmpeg_path: &str, encoder: &str) -> Result<bool> {
+    let output = Command::new(ffmpeg_path)
+        .args(["-hide_banner", "-encoders"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to list ffmpeg encoders using '{}'; check --ffmpeg-path",
+                ffmpeg_path
+            )
+        })?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "ffmpeg encoder listing failed for '{}': non-zero exit",
+            ffmpeg_path
+        ));
+    }
+
+    let encoders = String::from_utf8_lossy(&output.stdout);
+    Ok(encoders.contains(encoder))
+}
+
+fn resolve_codec_with_fallback(
+    ffmpeg_path: &str,
+    requested_codec: VideoCodec,
+) -> Result<VideoCodec> {
+    let has_x264 = ffmpeg_has_encoder(ffmpeg_path, "libx264")?;
+    let has_x265 = ffmpeg_has_encoder(ffmpeg_path, "libx265")?;
+
+    match requested_codec {
+        VideoCodec::H264 => {
+            if has_x264 {
+                Ok(VideoCodec::H264)
+            } else {
+                Err(anyhow!(
+                    "requested --codec h264 but ffmpeg encoder 'libx264' is unavailable"
+                ))
+            }
+        }
+        VideoCodec::H265 => {
+            if has_x265 {
+                Ok(VideoCodec::H265)
+            } else if has_x264 {
+                eprintln!(
+                    "warning: ffmpeg encoder 'libx265' not found, falling back to h264 (libx264)"
+                );
+                Ok(VideoCodec::H264)
+            } else {
+                Err(anyhow!(
+                    "ffmpeg does not provide 'libx265' or 'libx264'; cannot encode video"
+                ))
+            }
+        }
     }
 }
 
@@ -332,6 +444,7 @@ fn main() -> Result<()> {
     }
 
     ensure_ffmpeg_available(&cli.ffmpeg_path)?;
+    let resolved_codec = resolve_codec_with_fallback(&cli.ffmpeg_path, cli.codec)?;
 
     let monitors = load_monitors()?;
 
@@ -345,12 +458,13 @@ fn main() -> Result<()> {
 
     println!("Starting snapstream capture pipeline (ffmpeg chunked video)");
     println!(
-        "monitor={} fps={} directory={} chunk_seconds={} quality={:?}",
+        "monitor={} fps={} directory={} chunk_seconds={} quality={:?} codec={:?}",
         selected_monitor.id,
         cli.fps,
         cli.directory.display(),
         cli.chunk_seconds,
-        cli.video_quality
+        cli.video_quality,
+        resolved_codec
     );
     if let Some(limit) = cli.frames {
         println!("frame_limit={}", limit);
@@ -396,6 +510,7 @@ fn main() -> Result<()> {
                         selected_monitor.id,
                         cli.fps,
                         cli.video_quality,
+                        resolved_codec,
                         width,
                         height,
                     )?;
