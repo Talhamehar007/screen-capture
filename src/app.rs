@@ -9,11 +9,12 @@ use crate::monitor::{
     load_monitors, monitor_id_set, print_monitors, resolve_target_monitors,
     resolve_target_monitors_runtime, MonitorInfo,
 };
-use crate::writer::{recover_partial_chunks, FfmpegChunkWriter};
+use crate::writer::{count_partial_chunks, recover_partial_chunks, FfmpegChunkWriter};
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -21,6 +22,10 @@ use std::time::{Duration, Instant};
 
 pub fn run() -> Result<()> {
     let mut cli = Cli::parse();
+
+    if cli.status {
+        return run_status(&cli);
+    }
 
     if cli.fps <= 0.0 {
         return Err(anyhow!("--fps must be greater than 0"));
@@ -244,6 +249,87 @@ pub fn run() -> Result<()> {
 
     println!("Done. total_frames_written={}", total_frames_written);
     Ok(())
+}
+
+fn run_status(cli: &Cli) -> Result<()> {
+    println!("screen-capture status report");
+    println!("============================");
+
+    let mut ready = true;
+
+    let ffmpeg_path = match resolve_ffmpeg_path(&cli.ffmpeg_path) {
+        Ok(path) => {
+            println!("ffmpeg: ok ({})", path);
+            Some(path)
+        }
+        Err(error) => {
+            ready = false;
+            println!("ffmpeg: fail ({})", error);
+            None
+        }
+    };
+
+    if let Some(path) = &ffmpeg_path {
+        match resolve_encoder_config(path, cli.codec, cli.video_quality) {
+            Ok(encoder) => {
+                println!(
+                    "encoder: ok (requested={:?}, resolved={:?}, name={}, preset={}, crf={})",
+                    cli.codec, encoder.codec, encoder.codec_name, encoder.preset, encoder.crf
+                );
+            }
+            Err(error) => {
+                ready = false;
+                println!("encoder: fail ({})", error);
+            }
+        }
+    } else {
+        println!("encoder: skip (ffmpeg unavailable)");
+    }
+
+    match fs::create_dir_all(&cli.directory) {
+        Ok(()) => println!("output_dir: ok ({})", cli.directory.display()),
+        Err(error) => {
+            ready = false;
+            println!(
+                "output_dir: fail ({} -> {})",
+                cli.directory.display(),
+                error
+            );
+        }
+    }
+
+    let partial_count = count_partial_chunks(&cli.directory);
+    println!("partial_chunks: {}", partial_count);
+
+    match load_monitors() {
+        Ok(monitors) => {
+            println!("monitors: ok (count={})", monitors.len());
+            let targets =
+                resolve_target_monitors_runtime(&monitors, &cli.monitor_id, cli.use_all_monitors);
+            println!(
+                "target_monitors: {:?}",
+                targets.iter().map(|monitor| monitor.id).collect::<Vec<_>>()
+            );
+
+            if targets.is_empty() {
+                ready = false;
+                println!("target_status: fail (no target monitor available)");
+            } else {
+                println!("target_status: ok");
+            }
+        }
+        Err(error) => {
+            ready = false;
+            println!("monitors: fail ({})", error);
+        }
+    }
+
+    if ready {
+        println!("overall: ready");
+        Ok(())
+    } else {
+        Err(anyhow!("status check failed"))
+    }
 }
 
 fn should_rescan_monitors(last_rescan: Instant, rescan_interval: Duration) -> bool {

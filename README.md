@@ -13,7 +13,10 @@ ffmpeg -version
 # 2) List monitors
 cargo run -- --list-monitors
 
-# 3) Start recording (writes chunked MP4 files)
+# 3) Run readiness preflight
+cargo run -- --status
+
+# 4) Start recording (writes chunked MP4 files)
 cargo run -- --fps 2 --directory ./captures
 ```
 
@@ -127,11 +130,26 @@ screen-capture [OPTIONS]
 | `--video-quality` | enum | `balanced` | `low`, `balanced`, `high`, `max` |
 | `--codec` | enum | `h265` | `h265`, `h264` |
 | `--frames` | int | unlimited | Capture exactly N frames, then exit |
+| `--status` | bool | `false` | Run readiness checks and exit |
 | `--ffmpeg-path` | path | `ffmpeg` | ffmpeg binary path |
 | `--monitor-rescan-seconds` | int | `5` | Monitor re-scan interval when capturing all monitors |
 | `--capture-failure-rescan-threshold` | int | `3` | Force monitor re-scan after N consecutive capture failures |
 | `--recover-partial-chunks` | bool | `true` | Attempt startup recovery of `*.mp4.part` leftovers |
 | `--list-monitors` | bool | `false` | Print monitors and exit |
+
+### Status Mode
+
+`--status` runs a preflight check and exits without recording.
+
+Checks include:
+
+- ffmpeg availability and resolved path
+- codec/encoder availability and resolved encoder
+- output directory writeability
+- pending `*.mp4.part` crash leftovers
+- monitor discovery and resolved target monitor set
+
+If any critical check fails, status exits with a non-zero code.
 
 ### Codec and Fallback Behavior
 

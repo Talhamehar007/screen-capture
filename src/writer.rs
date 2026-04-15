@@ -223,6 +223,33 @@ pub fn recover_partial_chunks(ffmpeg_path: &str, directory: &Path) -> Result<Rec
     Ok(stats)
 }
 
+pub fn count_partial_chunks(directory: &Path) -> u64 {
+    if !directory.exists() {
+        return 0;
+    }
+
+    let mut count = 0u64;
+    let mut stack = vec![directory.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if recoverable_final_path_from_temp_path(&path).is_some() {
+                count += 1;
+            }
+        }
+    }
+
+    count
+}
+
 fn attempt_recover_partial_chunk(
     ffmpeg_path: &str,
     temp_path: &Path,
@@ -309,5 +336,11 @@ mod tests {
     fn ignores_non_part_paths() {
         let path = PathBuf::from("captures/2026-04-15/123_m1.mp4");
         assert!(recoverable_final_path_from_temp_path(&path).is_none());
+    }
+
+    #[test]
+    fn count_partial_chunks_returns_zero_for_missing_directory() {
+        let path = PathBuf::from("/tmp/nonexistent-screen-capture-dir-123456");
+        assert_eq!(count_partial_chunks(&path), 0);
     }
 }

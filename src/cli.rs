@@ -73,6 +73,12 @@ pub struct Cli {
 
     #[arg(
         long,
+        help = "Run readiness checks (ffmpeg, codec, monitors, output dir) and exit"
+    )]
+    pub status: bool,
+
+    #[arg(
+        long,
         value_name = "N",
         help = "Capture exactly N frames total (across all monitors), then exit"
     )]
