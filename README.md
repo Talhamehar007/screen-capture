@@ -29,6 +29,7 @@ This project extracts only the capture pipeline from a broader recording stack a
 
 - monitor discovery and monitor selection
 - all-monitor capture mode with periodic monitor re-scan
+- capture-failure triggered monitor re-scan and writer restart
 - periodic frame capture (`--fps`)
 - ffmpeg-based chunked video encoding (`.mp4`)
 - configurable codec, quality, and chunk duration
@@ -128,6 +129,8 @@ screen-capture [OPTIONS]
 | `--frames` | int | unlimited | Capture exactly N frames, then exit |
 | `--ffmpeg-path` | path | `ffmpeg` | ffmpeg binary path |
 | `--monitor-rescan-seconds` | int | `5` | Monitor re-scan interval when capturing all monitors |
+| `--capture-failure-rescan-threshold` | int | `3` | Force monitor re-scan after N consecutive capture failures |
+| `--recover-partial-chunks` | bool | `true` | Attempt startup recovery of `*.mp4.part` leftovers |
 | `--list-monitors` | bool | `false` | Print monitors and exit |
 
 ### Codec and Fallback Behavior
@@ -136,6 +139,12 @@ screen-capture [OPTIONS]
 - If `libx265` is missing but `libx264` exists, `h265` requests auto-fallback to `h264` with a warning.
 - If `--codec h264` is explicitly requested, `libx264` must exist.
 - If neither encoder exists, startup fails with a clear error.
+
+### Crash Recovery Behavior
+
+- In-progress chunks are written as `*.mp4.part` and finalized to `*.mp4` on clean close.
+- On startup, `screen-capture` scans for leftover `*.mp4.part` files and attempts best-effort remux recovery.
+- Recovery summary is printed at startup (`scanned/recovered/failed/skipped`).
 
 ### Quality Mapping
 

@@ -93,4 +93,20 @@ pub struct Cli {
         help = "How often to rescan monitors when --use-all-monitors is enabled"
     )]
     pub monitor_rescan_seconds: u64,
+
+    #[arg(
+        long,
+        default_value_t = 3,
+        value_name = "COUNT",
+        help = "Force monitor re-scan after this many consecutive capture failures on a monitor"
+    )]
+    pub capture_failure_rescan_threshold: u32,
+
+    #[arg(
+        long,
+        default_value_t = true,
+        action = ArgAction::Set,
+        help = "Attempt recovery of crash leftovers (*.mp4.part) on startup"
+    )]
+    pub recover_partial_chunks: bool,
 }

@@ -86,6 +86,52 @@ pub fn resolve_target_monitors(
         .ok_or_else(|| anyhow!("no monitors found"))
 }
 
+pub fn resolve_target_monitors_runtime(
+    monitors: &[MonitorInfo],
+    requested_ids: &[u32],
+    use_all_monitors: bool,
+) -> Vec<MonitorInfo> {
+    if !requested_ids.is_empty() {
+        let mut targets = Vec::new();
+        for id in requested_ids {
+            if let Some(monitor) = monitors
+                .iter()
+                .find(|candidate| candidate.id == *id)
+                .cloned()
+            {
+                if !targets
+                    .iter()
+                    .any(|candidate: &MonitorInfo| candidate.id == monitor.id)
+                {
+                    targets.push(monitor);
+                }
+            }
+        }
+        return targets;
+    }
+
+    if use_all_monitors {
+        return monitors.to_vec();
+    }
+
+    monitors
+        .iter()
+        .find(|monitor| monitor.is_primary)
+        .cloned()
+        .or_else(|| monitors.first().cloned())
+        .map(|monitor| vec![monitor])
+        .unwrap_or_default()
+}
+
+pub fn monitor_id_set(monitors: &[MonitorInfo]) -> Vec<u32> {
+    let mut ids = monitors
+        .iter()
+        .map(|monitor| monitor.id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +180,20 @@ mod tests {
         let targets = resolve_target_monitors(&monitors, &[], false).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id, 1);
+    }
+
+    #[test]
+    fn runtime_resolution_allows_partial_requested_ids() {
+        let monitors = sample_monitors();
+        let targets = resolve_target_monitors_runtime(&monitors, &[2, 99], false);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id, 2);
+    }
+
+    #[test]
+    fn monitor_id_set_is_sorted() {
+        let mut monitors = sample_monitors();
+        monitors.swap(0, 1);
+        assert_eq!(monitor_id_set(&monitors), vec![1, 2]);
     }
 }

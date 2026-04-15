@@ -5,8 +5,11 @@
 use crate::capture::capture_frame_rgba;
 use crate::cli::{Cli, MAX_FPS};
 use crate::ffmpeg::{resolve_encoder_config, resolve_ffmpeg_path};
-use crate::monitor::{load_monitors, print_monitors, resolve_target_monitors, MonitorInfo};
-use crate::writer::FfmpegChunkWriter;
+use crate::monitor::{
+    load_monitors, monitor_id_set, print_monitors, resolve_target_monitors,
+    resolve_target_monitors_runtime, MonitorInfo,
+};
+use crate::writer::{recover_partial_chunks, FfmpegChunkWriter};
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use std::collections::hash_map::Entry;
@@ -28,6 +31,11 @@ pub fn run() -> Result<()> {
     if cli.monitor_rescan_seconds == 0 {
         return Err(anyhow!("--monitor-rescan-seconds must be greater than 0"));
     }
+    if cli.capture_failure_rescan_threshold == 0 {
+        return Err(anyhow!(
+            "--capture-failure-rescan-threshold must be greater than 0"
+        ));
+    }
 
     if cli.fps > MAX_FPS {
         eprintln!("warning: capping fps from {} to {}", cli.fps, MAX_FPS);
@@ -36,6 +44,16 @@ pub fn run() -> Result<()> {
 
     let ffmpeg_path = resolve_ffmpeg_path(&cli.ffmpeg_path)?;
     let encoder_config = resolve_encoder_config(&ffmpeg_path, cli.codec, cli.video_quality)?;
+
+    if cli.recover_partial_chunks {
+        let recovery = recover_partial_chunks(&ffmpeg_path, &cli.directory)?;
+        if recovery.scanned > 0 {
+            println!(
+                "recovery: scanned={} recovered={} failed={} skipped={}",
+                recovery.scanned, recovery.recovered, recovery.failed, recovery.skipped
+            );
+        }
+    }
 
     let monitors = load_monitors()?;
 
@@ -72,9 +90,11 @@ pub fn run() -> Result<()> {
 
     let mut total_frames_written: u64 = 0;
     let mut active_chunks: HashMap<u32, FfmpegChunkWriter> = HashMap::new();
+    let mut capture_failures: HashMap<u32, u32> = HashMap::new();
 
     let mut last_monitor_rescan = Instant::now();
     let monitor_rescan_interval = Duration::from_secs(cli.monitor_rescan_seconds);
+    let mut force_monitor_rescan = false;
 
     while running.load(Ordering::SeqCst) {
         if let Some(limit) = cli.frames {
@@ -85,15 +105,28 @@ pub fn run() -> Result<()> {
 
         let tick_start = Instant::now();
 
-        if should_rescan_monitors(&cli, last_monitor_rescan, monitor_rescan_interval) {
+        if should_rescan_monitors(last_monitor_rescan, monitor_rescan_interval)
+            || force_monitor_rescan
+        {
+            force_monitor_rescan = false;
             last_monitor_rescan = Instant::now();
             if let Ok(monitors_now) = load_monitors() {
-                if let Ok(resolved) =
-                    resolve_target_monitors(&monitors_now, &cli.monitor_id, cli.use_all_monitors)
-                {
-                    targets = resolved;
-                    drop_removed_monitor_chunks(&mut active_chunks, &targets);
+                let resolved = resolve_target_monitors_runtime(
+                    &monitors_now,
+                    &cli.monitor_id,
+                    cli.use_all_monitors,
+                );
+
+                if monitor_id_set(&resolved) != monitor_id_set(&targets) {
+                    println!(
+                        "monitor set changed: {:?} -> {:?}",
+                        monitor_id_set(&targets),
+                        monitor_id_set(&resolved)
+                    );
                 }
+
+                targets = resolved;
+                drop_removed_monitor_chunks(&mut active_chunks, &targets);
             }
         }
 
@@ -106,6 +139,8 @@ pub fn run() -> Result<()> {
 
             match capture_frame_rgba(monitor.id) {
                 Ok(frame) => {
+                    capture_failures.remove(&monitor.id);
+
                     rotate_chunk_if_needed(
                         &mut active_chunks,
                         monitor.id,
@@ -159,6 +194,31 @@ pub fn run() -> Result<()> {
                 }
                 Err(error) => {
                     eprintln!("capture error for monitor {}: {}", monitor.id, error);
+
+                    let failures = capture_failures
+                        .entry(monitor.id)
+                        .and_modify(|count| *count += 1)
+                        .or_insert(1);
+
+                    if *failures >= cli.capture_failure_rescan_threshold {
+                        eprintln!(
+                            "monitor {} reached {} consecutive capture failures; forcing rescan",
+                            monitor.id, failures
+                        );
+                        force_monitor_rescan = true;
+                        capture_failures.insert(monitor.id, 0);
+
+                        if let Some(writer) = active_chunks.remove(&monitor.id) {
+                            let chunk_path = writer.chunk_path.clone();
+                            if let Err(close_error) = writer.finish() {
+                                eprintln!(
+                                    "chunk finalize error after repeated capture failure for {}: {}",
+                                    chunk_path.display(),
+                                    close_error
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -186,8 +246,8 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn should_rescan_monitors(cli: &Cli, last_rescan: Instant, rescan_interval: Duration) -> bool {
-    cli.use_all_monitors && cli.monitor_id.is_empty() && last_rescan.elapsed() >= rescan_interval
+fn should_rescan_monitors(last_rescan: Instant, rescan_interval: Duration) -> bool {
+    last_rescan.elapsed() >= rescan_interval
 }
 
 fn drop_removed_monitor_chunks(
