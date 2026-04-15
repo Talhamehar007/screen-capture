@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible problem in Snapstream.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug.
+
+        Before submitting:
+        - Confirm you're on the latest `main` or latest release.
+        - Check existing issues for duplicates.
+        - Do not include sensitive screenshots, secrets, or personal data.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One-line description of the issue.
+      placeholder: Snapstream exits with an error when using --monitor-id 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide exact, minimal steps.
+      placeholder: |
+        1. Run `snapstream --list-monitors`
+        2. Run `snapstream --monitor-id 2 --fps 2 --directory ./captures`
+        3. Observe error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste relevant terminal output. Redact sensitive data.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Snapstream version
+      placeholder: v0.1.0 or commit SHA
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 14.7 / Windows 11 / Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add any other details that may help.
+

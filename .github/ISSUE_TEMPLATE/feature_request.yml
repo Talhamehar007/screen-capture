@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest an improvement for Snapstream.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement.
+
+        Snapstream is intentionally scoped to screen capture only.
+        Requests that add OCR/audio/AI/server/cloud functionality may be out of scope.
+
+  - type: input
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem are you trying to solve?
+      placeholder: I need deterministic file naming for integration pipelines
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe what you want to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What alternatives did you evaluate?
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope impact
+      description: Explain how this stays aligned with capture-only scope.
+      placeholder: This only changes output naming in the existing capture pipeline.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Links, examples, or related issues.
+
