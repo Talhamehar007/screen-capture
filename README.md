@@ -28,6 +28,7 @@ This project extracts only the capture pipeline from a broader recording stack a
 ### In Scope
 
 - monitor discovery and monitor selection
+- all-monitor capture mode with periodic monitor re-scan
 - periodic frame capture (`--fps`)
 - ffmpeg-based chunked video encoding (`.mp4`)
 - configurable codec, quality, and chunk duration
@@ -47,6 +48,18 @@ Compared with writing individual images, chunked video provides:
 - easier archival/transfer
 - cleaner long-session recording
 - lower filesystem overhead
+
+## Scaffold Architecture
+
+The project is intentionally split into small modules so capture behavior is easier to evolve and test:
+
+- `src/main.rs` — entrypoint wiring
+- `src/app.rs` — runtime loop, multi-monitor orchestration, chunk lifecycle
+- `src/cli.rs` — CLI schema and runtime limits
+- `src/monitor.rs` — monitor discovery/selection logic
+- `src/capture.rs` — frame acquisition from monitor IDs
+- `src/ffmpeg.rs` — ffmpeg discovery, encoder selection, codec fallback
+- `src/writer.rs` — ffmpeg chunk writer and frame streaming
 
 ## Requirements
 
@@ -107,12 +120,14 @@ screen-capture [OPTIONS]
 | `--fps` | float | `2.0` | Capture rate (capped at 30 FPS) |
 | `--directory` | path | `screenpipe-captures` | Output directory for video chunks |
 | `--output-dir` | path | alias | Compatibility alias for `--directory` |
-| `--monitor-id` | int | auto | Target monitor ID |
+| `--monitor-id` | int (repeatable) | auto | Target monitor IDs |
+| `--use-all-monitors` | bool | `true` | Capture all monitors when no `--monitor-id` is provided |
 | `--chunk-seconds` | int | `30` | Rotate encoded chunk every N seconds |
 | `--video-quality` | enum | `balanced` | `low`, `balanced`, `high`, `max` |
 | `--codec` | enum | `h265` | `h265`, `h264` |
 | `--frames` | int | unlimited | Capture exactly N frames, then exit |
 | `--ffmpeg-path` | path | `ffmpeg` | ffmpeg binary path |
+| `--monitor-rescan-seconds` | int | `5` | Monitor re-scan interval when capturing all monitors |
 | `--list-monitors` | bool | `false` | Print monitors and exit |
 
 ### Codec and Fallback Behavior
@@ -157,6 +172,18 @@ Capture monitor `1` at 5 FPS, 20-second chunks:
 
 ```bash
 cargo run -- --monitor-id 1 --fps 5 --chunk-seconds 20 --directory ./captures
+```
+
+Capture all monitors (default behavior):
+
+```bash
+cargo run -- --use-all-monitors true --fps 2 --directory ./captures
+```
+
+Capture only selected monitors:
+
+```bash
+cargo run -- --use-all-monitors false --monitor-id 1 --monitor-id 3 --fps 2 --directory ./captures
 ```
 
 Force H.264:
