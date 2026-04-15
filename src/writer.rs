@@ -56,39 +56,12 @@ impl FfmpegChunkWriter {
 
         let size_arg = format!("{}x{}", width, height);
         let fps_arg = fps.to_string();
+        let ffmpeg_args =
+            build_chunk_ffmpeg_args(&size_arg, &fps_arg, encoder, chunk_temp_path_str);
 
         let mut command = ffmpeg_command(ffmpeg_path);
         command
-            .args([
-                "-y",
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "rgba",
-                "-s",
-                &size_arg,
-                "-r",
-                &fps_arg,
-                "-i",
-                "-",
-                "-vf",
-                "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-                "-c:v",
-                encoder.codec_name,
-                "-tag:v",
-                encoder.codec_tag,
-                "-preset",
-                encoder.preset,
-                "-crf",
-                encoder.crf,
-                encoder.codec_params_flag,
-                encoder.codec_params_value,
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                chunk_temp_path_str,
-            ])
+            .args(&ffmpeg_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -250,6 +223,46 @@ pub fn count_partial_chunks(directory: &Path) -> u64 {
     count
 }
 
+fn build_chunk_ffmpeg_args(
+    size_arg: &str,
+    fps_arg: &str,
+    encoder: &EncoderConfig,
+    chunk_temp_path: &str,
+) -> Vec<String> {
+    vec![
+        "-y".to_string(),
+        "-f".to_string(),
+        "rawvideo".to_string(),
+        "-pix_fmt".to_string(),
+        "rgba".to_string(),
+        "-s".to_string(),
+        size_arg.to_string(),
+        "-r".to_string(),
+        fps_arg.to_string(),
+        "-i".to_string(),
+        "-".to_string(),
+        "-vf".to_string(),
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2".to_string(),
+        "-c:v".to_string(),
+        encoder.codec_name.to_string(),
+        "-tag:v".to_string(),
+        encoder.codec_tag.to_string(),
+        "-preset".to_string(),
+        encoder.preset.to_string(),
+        "-crf".to_string(),
+        encoder.crf.to_string(),
+        encoder.codec_params_flag.to_string(),
+        encoder.codec_params_value.to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+        "-movflags".to_string(),
+        "+faststart".to_string(),
+        "-f".to_string(),
+        "mp4".to_string(),
+        chunk_temp_path.to_string(),
+    ]
+}
+
 fn attempt_recover_partial_chunk(
     ffmpeg_path: &str,
     temp_path: &Path,
@@ -311,6 +324,19 @@ fn ffmpeg_command(path: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::VideoCodec;
+
+    fn test_encoder_config() -> EncoderConfig {
+        EncoderConfig {
+            codec: VideoCodec::H264,
+            codec_name: "libx264",
+            codec_tag: "avc1",
+            codec_params_flag: "-x264-params",
+            codec_params_value: "bframes=0",
+            crf: "23",
+            preset: "fast",
+        }
+    }
 
     #[test]
     fn temp_path_suffix_is_stable() {
@@ -342,5 +368,22 @@ mod tests {
     fn count_partial_chunks_returns_zero_for_missing_directory() {
         let path = PathBuf::from("/tmp/nonexistent-screen-capture-dir-123456");
         assert_eq!(count_partial_chunks(&path), 0);
+    }
+
+    #[test]
+    fn chunk_ffmpeg_args_explicitly_set_mp4_format_for_part_output() {
+        let args = build_chunk_ffmpeg_args(
+            "1920x1080",
+            "2",
+            &test_encoder_config(),
+            "captures/2026-04-15/123_m1.mp4.part",
+        );
+
+        let mp4_output_pair = args.windows(2).any(|pair| pair == ["-f", "mp4"]);
+        assert!(mp4_output_pair);
+        assert_eq!(
+            args.last(),
+            Some(&"captures/2026-04-15/123_m1.mp4.part".to_string())
+        );
     }
 }

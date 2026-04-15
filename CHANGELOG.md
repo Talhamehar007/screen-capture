@@ -10,6 +10,17 @@ The format is based on Keep a Changelog.
 
 - No unreleased changes yet.
 
+## [0.1.1] - 2026-04-15
+
+### Fixed
+
+- ffmpeg chunk output now explicitly sets `-f mp4` when writing temporary `*.mp4.part` files.
+- Prevented repeated chunk writer failures on ffmpeg versions that reject muxer inference for `.part` suffixes.
+
+### Changed
+
+- Added regression coverage for ffmpeg chunk argument construction to keep `-f mp4` behavior stable.
+
 ## [0.1.0] - 2026-04-15
 
 ### Added
