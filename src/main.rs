@@ -4,18 +4,18 @@
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use clap::Parser;
-use image::codecs::jpeg::JpegEncoder;
-use image::imageops::FilterType;
-use image::DynamicImage;
+use clap::{Parser, ValueEnum};
 use std::fs;
-use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use xcap::Monitor;
+
+const MAX_FPS: f64 = 30.0;
 
 #[derive(Debug, Clone)]
 struct MonitorInfo {
@@ -28,10 +28,18 @@ struct MonitorInfo {
     is_primary: bool,
 }
 
+#[derive(Debug, Copy, Clone, ValueEnum)]
+enum VideoQuality {
+    Low,
+    Balanced,
+    High,
+    Max,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "snapstream",
-    about = "standalone screen capture pipeline (frames to JPEG)",
+    about = "standalone screen capture pipeline (ffmpeg video chunks)",
     version
 )]
 struct Cli {
@@ -47,34 +55,172 @@ struct Cli {
         alias = "output-dir",
         default_value = "screenpipe-captures",
         value_name = "PATH",
-        help = "Directory to write snapshots"
+        help = "Directory to write video chunks"
     )]
     directory: PathBuf,
 
     #[arg(long, value_name = "ID", help = "Capture a specific monitor ID")]
     monitor_id: Option<u32>,
 
-    #[arg(
-        long,
-        default_value_t = 80,
-        value_name = "1-100",
-        help = "JPEG quality"
-    )]
-    jpeg_quality: u8,
+    #[arg(long, default_value_t = 30, value_name = "SECONDS")]
+    chunk_seconds: u64,
 
-    #[arg(
-        long,
-        default_value_t = 1920,
-        value_name = "PX",
-        help = "Maximum output width in pixels (0 disables resizing)"
-    )]
-    max_width: u32,
+    #[arg(long, value_enum, default_value_t = VideoQuality::Balanced)]
+    video_quality: VideoQuality,
 
     #[arg(long, help = "List available monitors and exit")]
     list_monitors: bool,
 
     #[arg(long, value_name = "N", help = "Capture exactly N frames, then exit")]
     frames: Option<u64>,
+
+    #[arg(
+        long,
+        default_value = "ffmpeg",
+        value_name = "PATH",
+        help = "Path to ffmpeg binary"
+    )]
+    ffmpeg_path: String,
+}
+
+struct FfmpegChunkWriter {
+    chunk_path: PathBuf,
+    started_at: Instant,
+    width: u32,
+    height: u32,
+    child: Child,
+    stdin: ChildStdin,
+}
+
+impl FfmpegChunkWriter {
+    fn start(
+        ffmpeg_path: &str,
+        directory: &PathBuf,
+        monitor_id: u32,
+        fps: f64,
+        quality: VideoQuality,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let date_dir = directory.join(Utc::now().format("%Y-%m-%d").to_string());
+        fs::create_dir_all(&date_dir)
+            .with_context(|| format!("failed creating output directory {:?}", date_dir))?;
+
+        let chunk_path = date_dir.join(format!(
+            "{}_m{}.mp4",
+            Utc::now().timestamp_millis(),
+            monitor_id
+        ));
+        let chunk_path_str = chunk_path
+            .to_str()
+            .ok_or_else(|| anyhow!("invalid output path: {:?}", chunk_path))?;
+
+        let size_arg = format!("{}x{}", width, height);
+        let fps_arg = fps.to_string();
+        let crf = video_quality_to_crf(quality);
+        let preset = video_quality_to_preset(quality);
+
+        let mut command = Command::new(ffmpeg_path);
+        command
+            .args([
+                "-y",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba",
+                "-s",
+                &size_arg,
+                "-r",
+                &fps_arg,
+                "-i",
+                "-",
+                "-vf",
+                "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                "-c:v",
+                "libx265",
+                "-tag:v",
+                "hvc1",
+                "-preset",
+                preset,
+                "-crf",
+                crf,
+                "-x265-params",
+                "bframes=0",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                chunk_path_str,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("failed to start ffmpeg using '{}'", ffmpeg_path))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("failed to open ffmpeg stdin"))?;
+
+        Ok(Self {
+            chunk_path,
+            started_at: Instant::now(),
+            width,
+            height,
+            child,
+            stdin,
+        })
+    }
+
+    fn should_rotate(&self, chunk_seconds: u64, width: u32, height: u32) -> bool {
+        self.started_at.elapsed() >= Duration::from_secs(chunk_seconds)
+            || self.width != width
+            || self.height != height
+    }
+
+    fn write_frame(&mut self, frame_rgba: &[u8]) -> Result<()> {
+        self.stdin
+            .write_all(frame_rgba)
+            .context("failed writing frame bytes to ffmpeg")
+    }
+
+    fn finish(self) -> Result<()> {
+        drop(self.stdin);
+        let output = self
+            .child
+            .wait_with_output()
+            .context("failed waiting for ffmpeg")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!(
+                "ffmpeg failed for {:?}: {}",
+                self.chunk_path,
+                stderr
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+fn video_quality_to_crf(quality: VideoQuality) -> &'static str {
+    match quality {
+        VideoQuality::Low => "32",
+        VideoQuality::Balanced => "23",
+        VideoQuality::High => "18",
+        VideoQuality::Max => "14",
+    }
+}
+
+fn video_quality_to_preset(quality: VideoQuality) -> &'static str {
+    match quality {
+        VideoQuality::Low | VideoQuality::Balanced => "ultrafast",
+        VideoQuality::High => "fast",
+        VideoQuality::Max => "medium",
+    }
 }
 
 fn load_monitors() -> Result<Vec<MonitorInfo>> {
@@ -128,71 +274,64 @@ fn pick_monitor(monitors: &[MonitorInfo], requested_id: Option<u32>) -> Result<M
         .ok_or_else(|| anyhow!("no monitors found"))
 }
 
-fn capture_frame(monitor_id: u32) -> Result<DynamicImage> {
+fn capture_frame_rgba(monitor_id: u32) -> Result<(Vec<u8>, u32, u32)> {
     let monitors = Monitor::all().context("failed to enumerate monitors for capture")?;
     let monitor = monitors
         .iter()
         .find(|candidate| candidate.id().unwrap_or(0) == monitor_id)
         .ok_or_else(|| anyhow!("monitor {} not found during capture", monitor_id))?;
 
-    if monitor.width().unwrap_or(0) == 0 || monitor.height().unwrap_or(0) == 0 {
+    let width = monitor.width().unwrap_or(0);
+    let height = monitor.height().unwrap_or(0);
+    if width == 0 || height == 0 {
         return Err(anyhow!("monitor {} has invalid dimensions", monitor_id));
     }
 
-    let image = monitor
+    let frame = monitor
         .capture_image()
         .with_context(|| format!("failed to capture monitor {}", monitor_id))?;
 
-    Ok(DynamicImage::ImageRgba8(image))
+    Ok((frame.as_raw().clone(), width, height))
 }
 
-fn write_snapshot(
-    base_directory: &Path,
-    image: &DynamicImage,
-    monitor_id: u32,
-    quality: u8,
-    max_width: u32,
-) -> Result<PathBuf> {
-    let now = Utc::now();
-    let date_dir = base_directory.join(now.format("%Y-%m-%d").to_string());
-    fs::create_dir_all(&date_dir)
-        .with_context(|| format!("failed creating snapshot directory {:?}", date_dir))?;
+fn ensure_ffmpeg_available(ffmpeg_path: &str) -> Result<()> {
+    let status = Command::new(ffmpeg_path)
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| {
+            format!(
+                "failed to execute ffmpeg binary '{}'; check --ffmpeg-path",
+                ffmpeg_path
+            )
+        })?;
 
-    let file_path = date_dir.join(format!("{}_m{}.jpg", now.timestamp_millis(), monitor_id));
-
-    let resized;
-    let image_to_write = if max_width > 0 && image.width() > max_width {
-        resized = image.resize(max_width, u32::MAX, FilterType::Triangle);
-        &resized
-    } else {
-        image
-    };
-
-    let file = fs::File::create(&file_path)
-        .with_context(|| format!("failed creating snapshot file {:?}", file_path))?;
-    let mut writer = BufWriter::new(file);
-    let mut encoder = JpegEncoder::new_with_quality(&mut writer, quality);
-
-    encoder
-        .encode_image(image_to_write)
-        .with_context(|| format!("failed encoding JPEG {:?}", file_path))?;
-
-    writer
-        .flush()
-        .with_context(|| format!("failed flushing snapshot file {:?}", file_path))?;
-
-    Ok(file_path)
+    if !status.success() {
+        return Err(anyhow!(
+            "ffmpeg check failed for '{}': non-zero exit",
+            ffmpeg_path
+        ));
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
 
     if cli.fps <= 0.0 {
         return Err(anyhow!("--fps must be greater than 0"));
     }
-    if !(1..=100).contains(&cli.jpeg_quality) {
-        return Err(anyhow!("--jpeg-quality must be between 1 and 100"));
+    if cli.chunk_seconds == 0 {
+        return Err(anyhow!("--chunk-seconds must be greater than 0"));
     }
+
+    if cli.fps > MAX_FPS {
+        eprintln!("warning: capping fps from {} to {}", cli.fps, MAX_FPS);
+        cli.fps = MAX_FPS;
+    }
+
+    ensure_ffmpeg_available(&cli.ffmpeg_path)?;
 
     let monitors = load_monitors()?;
 
@@ -204,18 +343,19 @@ fn main() -> Result<()> {
     let selected_monitor = pick_monitor(&monitors, cli.monitor_id)?;
     let interval = Duration::from_secs_f64(1.0 / cli.fps);
 
-    println!("Starting snapstream capture pipeline");
+    println!("Starting snapstream capture pipeline (ffmpeg chunked video)");
     println!(
-        "monitor={} fps={} directory={} jpeg_quality={} max_width={}",
+        "monitor={} fps={} directory={} chunk_seconds={} quality={:?}",
         selected_monitor.id,
         cli.fps,
         cli.directory.display(),
-        cli.jpeg_quality,
-        cli.max_width
+        cli.chunk_seconds,
+        cli.video_quality
     );
     if let Some(limit) = cli.frames {
         println!("frame_limit={}", limit);
     }
+    println!("ffmpeg_path={}", cli.ffmpeg_path);
     println!("Press Ctrl+C to stop");
 
     let running = Arc::new(AtomicBool::new(true));
@@ -226,6 +366,7 @@ fn main() -> Result<()> {
     .context("failed to set Ctrl+C handler")?;
 
     let mut frames_written: u64 = 0;
+    let mut active_chunk: Option<FfmpegChunkWriter> = None;
 
     while running.load(Ordering::SeqCst) {
         if let Some(limit) = cli.frames {
@@ -236,22 +377,37 @@ fn main() -> Result<()> {
 
         let tick_start = Instant::now();
 
-        match capture_frame(selected_monitor.id) {
-            Ok(image) => match write_snapshot(
-                &cli.directory,
-                &image,
-                selected_monitor.id,
-                cli.jpeg_quality,
-                cli.max_width,
-            ) {
-                Ok(path) => {
+        match capture_frame_rgba(selected_monitor.id) {
+            Ok((frame_rgba, width, height)) => {
+                if let Some(writer) = &active_chunk {
+                    if writer.should_rotate(cli.chunk_seconds, width, height) {
+                        if let Some(old_writer) = active_chunk.take() {
+                            let chunk_path = old_writer.chunk_path.clone();
+                            old_writer.finish()?;
+                            println!("closed chunk={}", chunk_path.display());
+                        }
+                    }
+                }
+
+                if active_chunk.is_none() {
+                    let writer = FfmpegChunkWriter::start(
+                        &cli.ffmpeg_path,
+                        &cli.directory,
+                        selected_monitor.id,
+                        cli.fps,
+                        cli.video_quality,
+                        width,
+                        height,
+                    )?;
+                    println!("opened chunk={}", writer.chunk_path.display());
+                    active_chunk = Some(writer);
+                }
+
+                if let Some(writer) = &mut active_chunk {
+                    writer.write_frame(&frame_rgba)?;
                     frames_written += 1;
-                    println!("frame={} file={}", frames_written, path.display());
                 }
-                Err(error) => {
-                    eprintln!("write error: {}", error);
-                }
-            },
+            }
             Err(error) => {
                 eprintln!("capture error: {}", error);
             }
@@ -261,6 +417,12 @@ fn main() -> Result<()> {
         if elapsed < interval {
             thread::sleep(interval - elapsed);
         }
+    }
+
+    if let Some(writer) = active_chunk.take() {
+        let chunk_path = writer.chunk_path.clone();
+        writer.finish()?;
+        println!("closed chunk={}", chunk_path.display());
     }
 
     println!("Done. frames_written={}", frames_written);

@@ -1,66 +1,55 @@
 # snapstream
 
-`snapstream` is a standalone, minimal, **screen-capture-only** CLI.
+`snapstream` is a standalone, minimal, **screen-capture-only** CLI that writes **ffmpeg-encoded video chunks**.
 
-It does exactly one thing:
+It keeps only the capture pipeline and intentionally excludes higher-level platform features.
 
-1. choose a monitor
-2. capture frames at `--fps`
-3. write JPEG snapshots to `--directory`
+## What It Does
 
-No OCR. No audio. No AI. No server. No cloud sync.
+1. Enumerates displays.
+2. Captures frames from a selected monitor at `--fps`.
+3. Streams raw RGBA frames into `ffmpeg`.
+4. Encodes compact MP4 chunks (`libx265`, HEVC) for storage-efficient recording.
 
-## Why This Exists
+## What It Does Not Do
 
-This project is extracted from a larger recording stack to provide a small, public-friendly utility focused only on capture.
+- No OCR
+- No audio capture/transcription
+- No AI or summarization
+- No HTTP server / WebSocket APIs
+- No cloud sync
 
-- predictable behavior
-- narrow scope
-- easy to audit
-- safe to integrate into other pipelines
+## Why Video Chunks (Not Images)
 
-## Scope
+This tool is optimized for storage efficiency and long-running capture.
 
-Included:
+- Images (`.jpg/.png`) are simple but quickly consume disk.
+- Encoded MP4 chunks significantly reduce footprint.
+- Chunked output is resilient for long sessions and easier to archive.
 
-- monitor discovery and listing
-- monitor selection by ID
-- periodic frame capture
-- JPEG persistence with quality controls
-- optional output resizing
+## Requirements
 
-Out of scope:
+- Rust `1.92.0` (see `rust-toolchain.toml`)
+- `ffmpeg` available on PATH (or pass `--ffmpeg-path`)
 
-- OCR/text extraction
-- speech/audio processing
-- AI inference/summarization
-- APIs, background services, cloud features
-- analytics and telemetry
+Install ffmpeg examples:
 
-## Installation
+- macOS: `brew install ffmpeg`
+- Ubuntu/Debian: `sudo apt install ffmpeg`
+- Windows: install ffmpeg and ensure `ffmpeg.exe` is on PATH
 
-### Prerequisites
+## Build
 
-- Rust toolchain `1.92.0` (see `rust-toolchain.toml`)
-
-### Build from source
-
-From the `snapstream/` directory:
+From `snapstream/`:
 
 ```bash
 cargo build --release
 ```
 
-Binary path:
+Binary:
 
 ```text
 target/release/snapstream
-```
-
-### Run without manual build
-
-```bash
-cargo run -- --help
 ```
 
 ## Quick Start
@@ -71,7 +60,7 @@ List monitors:
 cargo run -- --list-monitors
 ```
 
-Capture using defaults:
+Capture with defaults:
 
 ```bash
 cargo run -- --fps 2 --directory ./captures
@@ -87,68 +76,68 @@ snapstream [OPTIONS]
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--fps` | float | `2.0` | Capture rate (frames per second) |
-| `--directory` | path | `screenpipe-captures` | Snapshot output directory |
+| `--fps` | float | `2.0` | Capture rate (capped at 30 FPS) |
+| `--directory` | path | `screenpipe-captures` | Output directory for video chunks |
 | `--output-dir` | path | alias | Compatibility alias for `--directory` |
-| `--monitor-id` | integer | auto | Capture specific monitor ID |
-| `--jpeg-quality` | `1..=100` | `80` | JPEG quality |
-| `--max-width` | integer | `1920` | Resize output width (`0` disables resize) |
+| `--monitor-id` | int | auto | Target monitor ID |
+| `--chunk-seconds` | int | `30` | Chunk rotation interval |
+| `--video-quality` | enum | `balanced` | `low`, `balanced`, `high`, `max` |
+| `--frames` | int | unlimited | Capture exactly N frames then exit |
+| `--ffmpeg-path` | path | `ffmpeg` | ffmpeg binary path |
 | `--list-monitors` | bool | `false` | Print monitors and exit |
-| `--frames` | integer | unlimited | Capture exactly N frames and exit |
 
-Monitor auto-selection behavior:
+### Quality Mapping
 
-- uses primary monitor if available
-- falls back to first available monitor
+`--video-quality` maps to encoder parameters:
+
+- `low` → CRF 32, preset ultrafast
+- `balanced` → CRF 23, preset ultrafast
+- `high` → CRF 18, preset fast
+- `max` → CRF 14, preset medium
 
 ## Output Layout
 
-Snapshots are written to:
+Chunks are written as:
 
 ```text
-<directory>/YYYY-MM-DD/<timestamp_ms>_m<monitor_id>.jpg
+<directory>/YYYY-MM-DD/<timestamp_ms>_m<monitor_id>.mp4
 ```
 
 Example:
 
 ```text
-captures/2026-04-15/1771221600123_m1.jpg
+captures/2026-04-15/1771221600123_m1.mp4
 ```
 
 ## Examples
 
-Capture monitor `1` at 5 FPS:
+Capture monitor 1 at 5 FPS with 20-second chunks:
 
 ```bash
-cargo run -- --monitor-id 1 --fps 5 --directory ./captures
+cargo run -- --monitor-id 1 --fps 5 --chunk-seconds 20 --directory ./captures
 ```
 
-Capture exactly 50 frames:
+Capture exactly 120 frames:
 
 ```bash
-cargo run -- --fps 2 --frames 50
+cargo run -- --fps 2 --frames 120 --directory ./captures
 ```
 
-Use alias flag:
+Use custom ffmpeg binary:
 
 ```bash
-cargo run -- --fps 1 --output-dir ./captures
+cargo run -- --ffmpeg-path /usr/local/bin/ffmpeg --fps 2 --directory ./captures
 ```
 
-## Privacy & Security
+## Public Repo Safety
 
-`snapstream` itself does not send data anywhere. It captures locally and writes local files.
+This is a public repository. Keep it clean and secret-free.
 
-However, screen captures may contain highly sensitive information (messages, credentials, tokens, personal data).
+- Never commit generated captures (`captures/`, `screenpipe-captures/`, `exports/`).
+- Never commit `.env` or machine-local config.
+- Never upload screenshots/videos containing sensitive information.
 
-Before publishing or sharing:
-
-1. review captured images
-2. delete sensitive frames
-3. never commit capture output directories
-4. run a final history + content check before push
-
-Recommended pre-push checks:
+Recommended checks before push:
 
 ```bash
 git status
@@ -156,56 +145,22 @@ git log --oneline --decorate -n 20
 git grep -n "API_KEY\|TOKEN\|SECRET\|PASSWORD\|PRIVATE KEY"
 ```
 
-## Public Repo Safety Rules
-
-- Do not commit runtime captures (`screenpipe-captures/`, `captures/`, exports).
-- Do not commit local env files, credentials, or machine-specific configs.
-- Keep example commands generic and secret-free.
-- If sensitive data is ever committed, rotate credentials and rewrite history before publishing.
-
-## Architecture (High Level)
-
-Single-process loop:
-
-1. Parse CLI options
-2. Enumerate monitors (`xcap`)
-3. Select target monitor
-4. Capture frame each tick (`--fps`)
-5. Optional resize (`--max-width`)
-6. Encode JPEG (`--jpeg-quality`)
-7. Persist to date-based directory
-
 ## Troubleshooting
 
-- **No monitors found**
-  - Verify display is connected and active.
-  - Re-run `--list-monitors`.
-- **Permission denied / black captures**
-  - Grant screen recording permission in your OS privacy settings.
-- **Capture fails after sleep/display changes**
-  - Restart the process.
-- **High CPU or disk usage**
-  - Reduce `--fps`.
-  - Lower `--max-width`.
-  - Lower `--jpeg-quality`.
+- **`ffmpeg` not found**
+  - Install ffmpeg or provide `--ffmpeg-path`.
+- **No monitors listed**
+  - Ensure display is connected and active.
+- **Permission issues / blank capture**
+  - Grant screen recording permission in OS privacy settings.
+- **Large files**
+  - Lower `--fps`, increase `--chunk-seconds`, or use `--video-quality low`.
 
 ## Development
 
-Format:
-
 ```bash
 cargo fmt
-```
-
-Type-check/build:
-
-```bash
 cargo check
-```
-
-Lint:
-
-```bash
 cargo clippy --all-targets -- -W clippy::all
 ```
 
