@@ -1,0 +1,17 @@
+[package]
+name = "snapstream"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone screen capture pipeline (frames to JPEG)"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0.86"
+chrono = { version = "0.4.31", features = ["clock"] }
+clap = { version = "4.5.0", features = ["derive"] }
+ctrlc = "3.4.5"
+image = "0.25"
+xcap = "0.9"
